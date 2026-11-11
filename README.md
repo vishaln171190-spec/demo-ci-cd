@@ -2,23 +2,26 @@
 
 Node.js powers the **CI** part (lint, tests, build). The build produces a **static site**, so it runs on ordinary PHP hosting (mPanel, cPanel, etc.) with no Node.js needed on the server.
 
-| Environment | URL | How it deploys |
+| Branch | Environment | URL |
 |---|---|---|
-| **Dev** | https://demo-dev-cicd.vinap.in | Automatically on every push to `main` that passes CI |
-| **Stage** | https://demo-stage-ci-cd.vinap.in | After dev succeeds **and** a reviewer approves |
+| `dev` | **Dev** | https://demo-dev-cicd.vinap.in |
+| `main` | **Stage** | https://demo-stage-ci-cd.vinap.in |
 
 ```
-push to main → Lint & Test & Build (Node 18/20/22) → Build release → Deploy DEV → ⏸ Approval → Deploy STAGE
-pull request → Lint & Test & Build only (nothing is deployed)
+push to dev   → Lint & Test & Build (Node 18/20/22) → Build release → Deploy DEV
+push to main  → Lint & Test & Build (Node 18/20/22) → Build release → Deploy STAGE
+pull request  → Lint & Test & Build only (nothing is deployed)
 ```
 
-The **same build** goes to dev and then to stage. The page shows a coloured badge (DEV or STAGE), the commit and the pipeline run, so you can see which build is live in each environment.
+**Promotion flow:** work on `dev` (or feature branches merged into `dev`), check it on the dev site, then open a pull request **`dev → main`**. Merging it deploys to stage.
+
+The page shows a coloured badge (DEV or STAGE), the commit and the pipeline run, so you can see which code is live in each environment.
 
 ## Project structure
 
 ```
 .github/workflows/
-├── ci-cd.yml        # main pipeline: test → build → dev → stage
+├── ci-cd.yml        # pipeline: test → build → deploy (dev branch → dev, main → stage)
 └── deploy-ssh.yml   # reusable deploy job (upload over SSH + health check)
 public/              # HTML, CSS, browser JS, .htaccess
 src/calculator.js    # shared logic (tested by Jest, used by the page)
@@ -86,29 +89,36 @@ Go to **Repo → Settings → Secrets and variables → Actions → New reposito
 
 > mPanel also offers SSH **password** login, but use the key. Passwords are easier to leak, and the pipeline is built for key login.
 
-### 6. GitHub: add the approval gate for stage
-1. Go to **Repo → Settings → Environments → New environment** and name it `staging`.
-2. Tick **Required reviewers**, add yourself, then click **Save protection rules**.
+### 6. GitHub: protect the branches (recommended)
+1. Go to **Repo → Settings → Branches → Add branch ruleset** (or **Add rule**) for `main`.
+2. Tick **Require a pull request before merging** and **Require status checks to pass**, then select the three `Lint & Test` checks.
+3. Optionally, do the same for `dev`.
+
+This way nothing reaches stage unless it went through a PR with green tests.
+
+Optional: for an extra manual approval before stage, go to **Settings → Environments → staging** and tick **Required reviewers**. Keep `development` without reviewers so dev deploys straight away.
 
 ---
 
 ## Demo script
 
 **Demo 1: Dev → Stage promotion**
-1. In `package.json`, change `"version": "1.0.0"` to `"1.1.0"`, then commit and push to `main`.
-2. Open the **Actions** tab and show: tests → build → **Dev** deploys automatically.
-3. Open https://demo-dev-cicd.vinap.in. It shows **DEV**, version 1.1.0 and the new commit.
-4. The **Stage** job shows *Waiting for review*. Click **Review deployments → Approve**.
-5. Open https://demo-stage-ci-cd.vinap.in. It shows **STAGE** with the **same commit and build time**.
+1. `git checkout dev`
+2. In `package.json`, change `"version": "1.0.0"` to `"1.1.0"`, then commit and `git push`.
+3. Open the **Actions** tab and show: tests → build → **Dev** deploys.
+4. Open https://demo-dev-cicd.vinap.in. It shows **DEV** and version 1.1.0. Stage still shows 1.0.0.
+5. On GitHub, open a pull request **`dev` → `main`**. The tests run on the PR. Merge it.
+6. Actions runs again on `main` and **Stage** deploys.
+7. Open https://demo-stage-ci-cd.vinap.in. It now shows **STAGE** and version 1.1.0.
 
 **Demo 2: CI blocks a bug**
-1. `git checkout -b bug-demo`
-2. In `src/calculator.js`, change `add()` to `return a - b;`, push, and open a pull request.
+1. `git checkout dev && git checkout -b bug-demo`
+2. In `src/calculator.js`, change `add()` to `return a - b;`, push, and open a pull request into `dev`.
 3. The tests fail on the PR ❌. Nothing deploys.
-4. Fix the code and push. The checks turn green ✅, and merging starts the dev → stage flow.
+4. Fix the code and push. The checks turn green ✅, and merging deploys to dev.
 
-**Demo 3: Reject a release**
-Push a change. Once it reaches dev, **Reject** the stage deployment. Stage keeps the previous version.
+**Demo 3: Environments are independent**
+Push a change to `dev` only. The dev site updates, but stage keeps the previous version until `dev` is merged into `main`.
 
 ## Troubleshooting
 

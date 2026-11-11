@@ -1,10 +1,14 @@
 name: Node CI-CD
 
+# Branch → environment:
+#   push to dev   → test → build → deploy to DEV   (demo-dev-cicd.vinap.in)
+#   push to main  → test → build → deploy to STAGE (demo-stage-ci-cd.vinap.in)
+#   pull requests → test only (nothing is deployed)
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
   pull_request:
-    branches: [main]
+    branches: [dev, main]
 
 jobs:
   # ------------------------------------------------------------
@@ -30,12 +34,12 @@ jobs:
       - run: npm run build
 
   # ------------------------------------------------------------
-  # Build once; the SAME build is deployed to dev and then stage
+  # Build the release (only for pushes to dev or main)
   # ------------------------------------------------------------
   build:
     name: Build release
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,11 +62,12 @@ jobs:
           retention-days: 7
 
   # ------------------------------------------------------------
-  # CD 1: deploy to DEV automatically
+  # CD: dev branch → DEV
   # ------------------------------------------------------------
   deploy-dev:
     name: Dev
     needs: build
+    if: github.ref == 'refs/heads/dev'
     uses: ./.github/workflows/deploy-ssh.yml
     with:
       environment: development
@@ -72,12 +77,13 @@ jobs:
     secrets: inherit
 
   # ------------------------------------------------------------
-  # CD 2: deploy to STAGE after dev succeeds AND a reviewer approves
-  # (approval is set on the "staging" environment in GitHub settings)
+  # CD: main branch → STAGE
+  # (add "Required reviewers" on the "staging" environment for an extra approval step)
   # ------------------------------------------------------------
   deploy-stage:
     name: Stage
-    needs: deploy-dev
+    needs: build
+    if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/deploy-ssh.yml
     with:
       environment: staging
