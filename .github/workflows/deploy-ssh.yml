@@ -62,7 +62,7 @@ jobs:
           esac
           TARGET="$HOME/$DEPLOY_PATH"
           if [ ! -d "$TARGET" ]; then
-            echo "Document root $TARGET does not exist. Check the subdomain's document root in cPanel > Domains."
+            echo "Document root $TARGET does not exist. Check the subdomain's document root in your hosting panel."
             exit 1
           fi
 

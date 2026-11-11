@@ -1,6 +1,6 @@
 # Node.js CI/CD Demo (Dev → Stage)
 
-Node.js powers the **CI** part (lint, tests, build). The build produces a **static site**, so it runs on ordinary PHP/cPanel hosting with no Node.js needed on the server.
+Node.js powers the **CI** part (lint, tests, build). The build produces a **static site**, so it runs on ordinary PHP hosting (mPanel, cPanel, etc.) with no Node.js needed on the server.
 
 | Environment | URL | How it deploys |
 |---|---|---|
@@ -40,40 +40,53 @@ npm start          # builds and serves dist/ at http://localhost:3000
 
 ## One-time setup
 
-### 1. cPanel: find each subdomain's document root
-In **cPanel → Domains** (or **Subdomains**), look at the **Document Root** column for both subdomains. The pipeline expects:
+### 1. Create a deploy SSH key (on your computer)
+mPanel only stores **public** keys, so create the key pair locally. Use a dedicated key for GitHub, not your personal one:
+
+```bash
+ssh-keygen -t ed25519 -N "" -C "github-actions-demo-ci-cd" -f ~/.ssh/github_deploy_demo
+```
+
+This creates two files:
+- `~/.ssh/github_deploy_demo.pub`: the **public** key, which goes into mPanel.
+- `~/.ssh/github_deploy_demo`: the **private** key, which goes into GitHub. Never share it or commit it.
+
+The key needs no passphrase because GitHub Actions can't type one.
+
+### 2. mPanel: add the public key
+Go to **mPanel → Developer Tools → SSH Keys → Add SSH key**. Name it `github-actions` and paste the full contents of `github_deploy_demo.pub` (one line starting with `ssh-ed25519`).
+
+### 3. Find each subdomain's document root
+In mPanel's domain or subdomain settings, check the **document root** folder of both subdomains. The pipeline expects:
 
 | Subdomain | Expected document root |
 |---|---|
-| demo-dev-cicd.vinap.in | `/home/<user>/demo-dev-cicd.vinap.in` |
-| demo-stage-ci-cd.vinap.in | `/home/<user>/demo-stage-ci-cd.vinap.in` |
+| demo-dev-cicd.vinap.in | `~/demo-dev-cicd.vinap.in` |
+| demo-stage-ci-cd.vinap.in | `~/demo-stage-ci-cd.vinap.in` |
 
-If yours is different (for example `public_html/demo-dev-cicd`), change `deploy_path` in `.github/workflows/ci-cd.yml` to that path **relative to your home folder**.
+If yours is different (for example `public_html/demo-dev-cicd`), change `deploy_path` in `.github/workflows/ci-cd.yml` to that path **relative to your home folder**. The test command in step 4 shows which folders exist.
 
-Also make sure both subdomains have HTTPS (**cPanel → SSL/TLS Status → Run AutoSSL**), because the health check calls the `https://` URLs.
+Also make sure both subdomains have an SSL certificate, because the health check calls the `https://` URLs.
 
-### 2. cPanel: create an SSH key for GitHub
-1. Go to **cPanel → SSH Access → Manage SSH Keys → Generate a New Key**. Name it `github_deploy` and leave the passphrase **empty**, because GitHub can't type one.
-2. Back on the key list, under **Public Keys**, click **Manage → Authorize** for `github_deploy`.
-3. Under **Private Keys**, click **View/Download** for `github_deploy` and copy the whole text box.
+### 4. Test the connection from your computer
+```bash
+ssh -i ~/.ssh/github_deploy_demo -p <port> <ssh-user>@103.108.220.222 "pwd && ls -la"
+```
+If this logs in **without asking for a password** and lists your home folder, the key works. Use the same port and user in the secrets below.
 
-### 3. GitHub: add the 4 secrets
+### 5. GitHub: add the 4 secrets
 Go to **Repo → Settings → Secrets and variables → Actions → New repository secret**:
 
 | Secret | What to put | Example |
 |---|---|---|
 | `SSH_HOST` | The server IP (recommended) or domain | `103.108.220.222` |
-| `SSH_PORT` | The SSH port from cPanel → SSH Access or your hosting email | `22` (some hosts use `21098` or `2222`) |
-| `SSH_USER` | Your **cPanel login username** (not an email address) | `myuser` |
-| `SSH_PRIVATE_KEY` | The full private key from step 2, including the BEGIN and END lines | `-----BEGIN OPENSSH PRIVATE KEY-----`<br>`...`<br>`-----END OPENSSH PRIVATE KEY-----` |
+| `SSH_PORT` | The SSH port shown in mPanel → **SSH Auth**, or in your hosting email | `22` |
+| `SSH_USER` | Your SSH username (shown in mPanel → **SSH Auth**) | `myuser` |
+| `SSH_PRIVATE_KEY` | The full contents of `~/.ssh/github_deploy_demo`, including the BEGIN and END lines | `-----BEGIN OPENSSH PRIVATE KEY-----`<br>`...`<br>`-----END OPENSSH PRIVATE KEY-----` |
 
-To test the values from your own computer before running the pipeline, save the key as `key.txt` and run:
-```bash
-ssh -i key.txt -p 22 <cpanel-user>@103.108.220.222 "pwd && ls"
-```
-If this lists your home folder, including `demo-dev-cicd.vinap.in`, the secrets will work.
+> mPanel also offers SSH **password** login, but use the key. Passwords are easier to leak, and the pipeline is built for key login.
 
-### 4. GitHub: add the approval gate for stage
+### 6. GitHub: add the approval gate for stage
 1. Go to **Repo → Settings → Environments → New environment** and name it `staging`.
 2. Tick **Required reviewers**, add yourself, then click **Save protection rules**.
 
@@ -101,7 +114,7 @@ Push a change. Once it reaches dev, **Reject** the stage deployment. Stage keeps
 
 | Problem | Fix |
 |---|---|
-| `Permission denied (publickey)` | The key isn't **Authorized** in cPanel, or `SSH_USER` or the key text is wrong |
+| `Permission denied (publickey)` | The public key isn't added in mPanel → SSH Keys, or `SSH_USER` or the private key text is wrong |
 | SSH timeout / `Connection refused` | Wrong `SSH_PORT`, or SSH isn't enabled for your account. Ask your host |
-| `Document root ... does not exist` | Fix `deploy_path` in `ci-cd.yml` to match cPanel → Domains |
+| `Document root ... does not exist` | Fix `deploy_path` in `ci-cd.yml` to match the subdomain's document root in mPanel |
 | Health check fails | Check that AutoSSL is issued for the subdomain and that the URL opens in a browser |
