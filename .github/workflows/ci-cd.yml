@@ -1,0 +1,77 @@
+name: Node CI-CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ------------------------------------------------------------
+  # CI, step 1: lint + test on several Node versions
+  # ------------------------------------------------------------
+  test:
+    name: Lint & Test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18, 20, 22]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test
+
+  # ------------------------------------------------------------
+  # CI, step 2: build the Docker image (proves it packages)
+  # ------------------------------------------------------------
+  build:
+    name: Build Docker image
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t node-cicd-demo:${{ github.sha }} .
+
+      - name: Smoke test the container
+        run: |
+          docker run -d -p 3000:3000 --name demo node-cicd-demo:${{ github.sha }}
+          sleep 3
+          curl --fail http://localhost:3000/health
+          docker stop demo
+
+  # ------------------------------------------------------------
+  # CD: deploy to Render, only on push to main after CI passes
+  # ------------------------------------------------------------
+  deploy:
+    name: Deploy to production
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production   # add "Required reviewers" here for a manual approval gate
+    steps:
+      - name: Trigger Render deploy
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "RENDER_DEPLOY_HOOK_URL secret is not set; skipping deploy."
+            exit 0
+          fi
+          curl --fail -X POST "$RENDER_DEPLOY_HOOK_URL"
+          echo "Deploy triggered on Render."
