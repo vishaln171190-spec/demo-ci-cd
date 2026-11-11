@@ -1,0 +1,90 @@
+# Reusable workflow: deploys the packaged app to one cPanel Node.js app over SSH.
+# Called from ci-cd.yml once for dev and once for stage.
+name: Deploy to cPanel
+
+on:
+  workflow_call:
+    inputs:
+      environment:      # GitHub environment name (approval rules live there)
+        required: true
+        type: string
+      env_label:        # short name shown on the page: dev / stage
+        required: true
+        type: string
+      app_root:         # cPanel "Application root", relative to the home directory
+        required: true
+        type: string
+      app_url:          # public URL used for the health check
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.env_label }}
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ inputs.app_url }}
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+    steps:
+      - name: Download release package
+        uses: actions/download-artifact@v4
+        with:
+          name: release
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Upload package to server
+        run: |
+          scp -P "$SSH_PORT" -i ~/.ssh/id_deploy release.tgz \
+            "$SSH_USER@$SSH_HOST:release-${{ inputs.env_label }}.tgz"
+
+      - name: Install and restart on server
+        run: |
+          ssh -p "$SSH_PORT" -i ~/.ssh/id_deploy "$SSH_USER@$SSH_HOST" \
+            bash -s -- "${{ inputs.app_root }}" "${{ inputs.env_label }}" "${{ github.sha }}" "${{ github.run_number }}" <<'REMOTE'
+          set -euo pipefail
+          APP_ROOT="$1"; ENV_LABEL="$2"; SHA="$3"; RUN="$4"
+          cd "$HOME/$APP_ROOT"
+
+          # Replace the code (node_modules is a cPanel symlink, so leave it alone)
+          rm -rf src
+          tar -xzf "$HOME/release-$ENV_LABEL.tgz"
+          rm -f "$HOME/release-$ENV_LABEL.tgz"
+
+          # Record what was deployed (shown on the home page and /health)
+          printf '{"environment":"%s","commit":"%s","run":"%s","deployedAt":"%s"}\n' \
+            "$ENV_LABEL" "$SHA" "$RUN" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > deploy-info.json
+
+          # Activate the cPanel Node.js virtual environment and install dependencies
+          ACTIVATE=$(ls -d "$HOME/nodevenv/$APP_ROOT"/*/bin/activate | head -n 1)
+          # shellcheck disable=SC1090
+          source "$ACTIVATE"
+          npm install --omit=dev --no-audit --no-fund
+
+          # Restart the app (Passenger watches tmp/restart.txt)
+          mkdir -p tmp
+          touch tmp/restart.txt
+          echo "Deployed $SHA to $ENV_LABEL"
+          REMOTE
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 10); do
+            if curl -fsS "${{ inputs.app_url }}/health" | grep -q "${{ github.sha }}"; then
+              echo "✅ ${{ inputs.app_url }} is running commit ${{ github.sha }}"
+              exit 0
+            fi
+            echo "Waiting for the app to come up... ($i/10)"
+            sleep 6
+          done
+          echo "❌ Health check failed for ${{ inputs.app_url }}"
+          exit 1

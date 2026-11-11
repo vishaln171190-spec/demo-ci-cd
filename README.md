@@ -1,24 +1,27 @@
-# Node.js CI/CD Demo
+# Node.js CI/CD Demo (Dev → Stage on cPanel)
 
-A small Express API that shows a full CI/CD pipeline with **GitHub Actions**:
+A small Express API with a full CI/CD pipeline built on **GitHub Actions**. It deploys to two cPanel Node.js apps:
+
+| Environment | URL | How it deploys |
+|---|---|---|
+| **Dev** | https://demo-dev-cicd.vinap.in | Automatically on every push to `main` that passes the tests |
+| **Stage** | https://demo-stage-ci-cd.vinap.in | After dev succeeds **and** a reviewer approves |
 
 ```
-git push → Lint → Test (Node 18/20/22) → Docker build + smoke test → Deploy to Render
+push to main → Lint & Test (Node 18/20/22) → Package → Deploy DEV → ⏸ Approval → Deploy STAGE
+pull request → Lint & Test only (nothing is deployed)
 ```
+
+The **same package** is deployed to dev and then to stage. The home page shows a coloured badge (DEV or STAGE), the commit and the pipeline run, so you can see exactly which build is live in each environment.
 
 ## Project structure
 
 ```
-node-cicd-demo/
-├── .github/workflows/ci-cd.yml   # the pipeline
-├── src/
-│   ├── app.js                    # Express routes
-│   ├── calculator.js             # business logic
-│   └── server.js                 # starts the server
-├── tests/                        # Jest + Supertest tests
-├── Dockerfile
-├── eslint.config.js
-└── package.json
+.github/workflows/
+├── ci-cd.yml           # main pipeline: test → package → dev → stage
+└── deploy-cpanel.yml   # reusable deploy job (SSH + restart + health check)
+src/                    # Express app
+tests/                  # Jest + Supertest tests
 ```
 
 ## Run locally
@@ -30,61 +33,71 @@ npm test
 npm start          # http://localhost:3000
 ```
 
-Endpoints: `/`, `/health`, `/api/add?a=2&b=3`, `/api/multiply?a=4&b=5`
+---
 
-## Set up the pipeline
+## One-time setup
 
-### 1. Push to GitHub
-Create an empty repository on GitHub (for example `node-cicd-demo`), then:
+### 1. cPanel: create two Node.js apps
+In **cPanel → Setup Node.js App → Create Application**, create both apps:
 
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin https://github.com/<your-username>/node-cicd-demo.git
-git push -u origin main
-```
+| Field | Dev app | Stage app |
+|---|---|---|
+| Node.js version | 20 (or the newest available) | same |
+| Application mode | Production | Production |
+| Application root | `demo-dev-cicd` | `demo-stage-ci-cd` |
+| Application URL | `demo-dev-cicd.vinap.in` | `demo-stage-ci-cd.vinap.in` |
+| Application startup file | `src/server.js` | `src/server.js` |
 
-Open the **Actions** tab. The pipeline runs `test → build → deploy`. The deploy step is skipped until step 2 is done.
+> The application roots must match `app_root` in `ci-cd.yml`. If you choose other names, change them there.
 
-### 2. Connect deployment (Render, free tier)
-1. Sign in at https://render.com with GitHub.
-2. **New → Web Service** → pick this repository.
-3. Runtime **Docker** (or Node with build `npm ci`, start `npm start`).
-4. In the service **Settings**, set **Auto-Deploy = No**, so that only the pipeline deploys.
-5. Copy the **Deploy Hook URL** from Settings.
-6. In GitHub, go to **Settings → Secrets and variables → Actions → New repository secret**:
-   - Name: `RENDER_DEPLOY_HOOK_URL`
-   - Value: the hook URL
+Also turn on HTTPS for both subdomains (**cPanel → SSL/TLS Status → Run AutoSSL**), because the health check calls the `https://` URLs.
 
-Every push to `main` that passes CI now deploys automatically.
+### 2. cPanel: create an SSH key for GitHub
+1. Go to **cPanel → SSH Access → Manage SSH Keys → Generate a New Key**. Name it `github_deploy` and leave the passphrase **empty**.
+2. Under **Public Keys**, click **Manage → Authorize** for that key.
+3. Under **Private Keys**, click **View/Download** and copy the whole private key, including the `-----BEGIN ... KEY-----` and `-----END ... KEY-----` lines.
+4. Note your SSH port (often `22`; some hosts use a custom one such as `21098`).
 
-### 3. Optional: manual approval (Continuous Delivery)
-In GitHub, go to **Settings → Environments → production → Required reviewers** and add yourself. Deploys then wait for your approval.
+### 3. GitHub: add secrets
+Go to **Repo → Settings → Secrets and variables → Actions → New repository secret**:
 
-## Demo script (what to show the audience)
+| Secret | Example value |
+|---|---|
+| `SSH_HOST` | `vinap.in` (or `103.108.220.222`) |
+| `SSH_PORT` | `22` |
+| `SSH_USER` | your cPanel username |
+| `SSH_PRIVATE_KEY` | the private key from step 2 |
 
-**Demo 1: Happy path**
-1. In `src/app.js`, change `VERSION = '1.0.0'` to `'1.1.0'`.
-2. Commit and push to `main`.
-3. Show the **Actions** tab: lint, tests on 3 Node versions, Docker build, then deploy.
-4. Open the live URL: the page now shows version 1.1.0.
+### 4. GitHub: add the approval gate for stage
+1. Go to **Repo → Settings → Environments → New environment** and name it `staging`.
+2. Tick **Required reviewers**, add yourself, then click **Save protection rules**.
+3. Optionally, create a `development` environment too. It needs no rules, and the pipeline creates it automatically if it doesn't exist.
+
+---
+
+## Demo script
+
+**Demo 1: Dev → Stage promotion**
+1. In `src/app.js`, change `VERSION = '1.0.0'` to `'1.1.0'`, then commit and push to `main`.
+2. Open the **Actions** tab and show: tests → package → **Dev** deploys automatically.
+3. Open https://demo-dev-cicd.vinap.in. It shows **DEV**, version 1.1.0 and the new commit.
+4. In Actions, the **Stage** job shows *Waiting for review*. Click **Review deployments → Approve**.
+5. Open https://demo-stage-ci-cd.vinap.in. It shows **STAGE** with the **same commit**.
 
 **Demo 2: CI blocks a bug**
-1. Create a branch: `git checkout -b bug-demo`.
-2. Break the logic in `src/calculator.js`: `return a - b;` in `add()`.
-3. Push and open a **pull request**.
-4. Show the tests failing on the PR (red ❌). Deploy does not run, so production stays safe.
-5. Fix the code and push again. The checks turn green ✅ and the PR can be merged, which deploys it.
+1. `git checkout -b bug-demo`
+2. In `src/calculator.js`, change `add()` to `return a - b;`, push, and open a pull request.
+3. The tests fail on the PR ❌. Nothing deploys, and dev and stage are untouched.
+4. Fix the code and push. The checks turn green ✅, and merging the PR starts the dev → stage flow.
 
-**Demo 3: Lint catches problems**
-Add an unused variable (`const x = 1;`) to any file and push. The **Lint** step fails.
+**Demo 3: Reject a release**
+Push a change. Once it reaches dev, **Reject** the stage deployment. Stage keeps running the previous version.
 
-## Pipeline jobs
+## Troubleshooting
 
-| Job | Stage | Runs when | What it does |
-|---|---|---|---|
-| `test` | CI | Every push and PR | `npm ci`, ESLint, Jest on Node 18, 20 and 22 |
-| `build` | CI | After `test` passes | Builds the Docker image and checks `/health` |
-| `deploy` | CD | Push to `main` only, after `build` | Calls the Render deploy hook |
+| Problem | Fix |
+|---|---|
+| `Permission denied (publickey)` | The key isn't authorized in cPanel, or the wrong private key or user is in the secrets |
+| `Connection refused` / timeout on SSH | Wrong `SSH_PORT`, or the host blocks SSH. Ask the host to enable SSH access |
+| `ls: .../nodevenv/...: No such file` | The Node.js app wasn't created in cPanel, or `app_root` doesn't match |
+| Health check fails | Check the app in **Setup Node.js App** (it must be started), that AutoSSL is issued, and the logs in `~/<app_root>/stderr.log` |

@@ -8,7 +8,7 @@ on:
 
 jobs:
   # ------------------------------------------------------------
-  # CI, step 1: lint + test on several Node versions
+  # CI: lint + test on several Node versions
   # ------------------------------------------------------------
   test:
     name: Lint & Test (Node ${{ matrix.node-version }})
@@ -17,61 +17,62 @@ jobs:
       matrix:
         node-version: [18, 20, 22]
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Run tests
-        run: npm test
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
 
   # ------------------------------------------------------------
-  # CI, step 2: build the Docker image (proves it packages)
+  # Package once; the SAME package is deployed to dev and stage
   # ------------------------------------------------------------
-  build:
-    name: Build Docker image
+  package:
+    name: Package release
     needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build image
-        run: docker build -t node-cicd-demo:${{ github.sha }} .
+      - name: Create release.tgz
+        run: tar -czf release.tgz src package.json package-lock.json
 
-      - name: Smoke test the container
-        run: |
-          docker run -d -p 3000:3000 --name demo node-cicd-demo:${{ github.sha }}
-          sleep 3
-          curl --fail http://localhost:3000/health
-          docker stop demo
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: release.tgz
+          retention-days: 7
 
   # ------------------------------------------------------------
-  # CD: deploy to Render, only on push to main after CI passes
+  # CD 1: deploy to DEV automatically
   # ------------------------------------------------------------
-  deploy:
-    name: Deploy to production
-    needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    environment: production   # add "Required reviewers" here for a manual approval gate
-    steps:
-      - name: Trigger Render deploy
-        env:
-          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
-        run: |
-          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
-            echo "RENDER_DEPLOY_HOOK_URL secret is not set; skipping deploy."
-            exit 0
-          fi
-          curl --fail -X POST "$RENDER_DEPLOY_HOOK_URL"
-          echo "Deploy triggered on Render."
+  deploy-dev:
+    name: Dev
+    needs: package
+    uses: ./.github/workflows/deploy-cpanel.yml
+    with:
+      environment: development
+      env_label: dev
+      app_root: demo-dev-cicd
+      app_url: https://demo-dev-cicd.vinap.in
+    secrets: inherit
+
+  # ------------------------------------------------------------
+  # CD 2: deploy to STAGE after dev succeeds AND a reviewer approves
+  # (approval is set on the "staging" environment in GitHub settings)
+  # ------------------------------------------------------------
+  deploy-stage:
+    name: Stage
+    needs: deploy-dev
+    uses: ./.github/workflows/deploy-cpanel.yml
+    with:
+      environment: staging
+      env_label: stage
+      app_root: demo-stage-ci-cd
+      app_url: https://demo-stage-ci-cd.vinap.in
+    secrets: inherit
