@@ -1,0 +1,6 @@
+# Always fetch fresh HTML/JSON so a new deploy shows up immediately
+<IfModule mod_headers.c>
+  <FilesMatch "\.(html|json|js|css)$">
+    Header set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+</IfModule>

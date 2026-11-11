@@ -8,7 +8,7 @@ on:
 
 jobs:
   # ------------------------------------------------------------
-  # CI: lint + test on several Node versions
+  # CI: lint + test + build on several Node versions
   # ------------------------------------------------------------
   test:
     name: Lint & Test (Node ${{ matrix.node-version }})
@@ -27,25 +27,34 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
+      - run: npm run build
 
   # ------------------------------------------------------------
-  # Package once; the SAME package is deployed to dev and stage
+  # Build once; the SAME build is deployed to dev and then stage
   # ------------------------------------------------------------
-  package:
-    name: Package release
+  build:
+    name: Build release
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Create release.tgz
-        run: tar -czf release.tgz src package.json package-lock.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Package dist/
+        run: tar -czf site.tgz -C dist .
 
       - uses: actions/upload-artifact@v4
         with:
-          name: release
-          path: release.tgz
+          name: site
+          path: site.tgz
           retention-days: 7
 
   # ------------------------------------------------------------
@@ -53,12 +62,12 @@ jobs:
   # ------------------------------------------------------------
   deploy-dev:
     name: Dev
-    needs: package
-    uses: ./.github/workflows/deploy-cpanel.yml
+    needs: build
+    uses: ./.github/workflows/deploy-ssh.yml
     with:
       environment: development
       env_label: dev
-      app_root: demo-dev-cicd
+      deploy_path: demo-dev-cicd.vinap.in   # document root, relative to the home folder
       app_url: https://demo-dev-cicd.vinap.in
     secrets: inherit
 
@@ -69,10 +78,10 @@ jobs:
   deploy-stage:
     name: Stage
     needs: deploy-dev
-    uses: ./.github/workflows/deploy-cpanel.yml
+    uses: ./.github/workflows/deploy-ssh.yml
     with:
       environment: staging
       env_label: stage
-      app_root: demo-stage-ci-cd
+      deploy_path: demo-stage-ci-cd.vinap.in   # document root, relative to the home folder
       app_url: https://demo-stage-ci-cd.vinap.in
     secrets: inherit

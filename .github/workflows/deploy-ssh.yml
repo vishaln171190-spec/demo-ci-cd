@@ -1,0 +1,90 @@
+# Reusable workflow: uploads the built static site to one subdomain's
+# document root over SSH. Called from ci-cd.yml once for dev and once for stage.
+name: Deploy over SSH
+
+on:
+  workflow_call:
+    inputs:
+      environment:      # GitHub environment name (approval rules live there)
+        required: true
+        type: string
+      env_label:        # short name shown on the page: dev / stage
+        required: true
+        type: string
+      deploy_path:      # subdomain document root, relative to the home directory
+        required: true
+        type: string
+      app_url:          # public URL used for the health check
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.env_label }}
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ inputs.app_url }}
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+    steps:
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: site
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Upload build to server
+        run: |
+          scp -P "$SSH_PORT" -i ~/.ssh/id_deploy site.tgz \
+            "$SSH_USER@$SSH_HOST:site-${{ inputs.env_label }}.tgz"
+
+      - name: Publish files
+        run: |
+          ssh -p "$SSH_PORT" -i ~/.ssh/id_deploy "$SSH_USER@$SSH_HOST" \
+            bash -s -- "${{ inputs.deploy_path }}" "${{ inputs.env_label }}" "${{ github.sha }}" "${{ github.run_number }}" <<'REMOTE'
+          set -euo pipefail
+          DEPLOY_PATH="$1"; ENV_LABEL="$2"; SHA="$3"; RUN="$4"
+          PACKAGE="$HOME/site-$ENV_LABEL.tgz"
+
+          # Safety: never deploy into the home folder or the main site's public_html
+          case "$DEPLOY_PATH" in
+            ""|"."|"/"|"public_html"|"public_html/"|"~")
+              echo "Refusing to deploy to '$DEPLOY_PATH'"; exit 1 ;;
+          esac
+          TARGET="$HOME/$DEPLOY_PATH"
+          if [ ! -d "$TARGET" ]; then
+            echo "Document root $TARGET does not exist. Check the subdomain's document root in cPanel > Domains."
+            exit 1
+          fi
+
+          tar -xzf "$PACKAGE" -C "$TARGET"
+          rm -f "$PACKAGE"
+
+          # Per-environment info (shown on the page as the DEV/STAGE badge)
+          printf '{"environment":"%s","commit":"%s","run":"%s","deployedAt":"%s"}\n' \
+            "$ENV_LABEL" "$SHA" "$RUN" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$TARGET/deploy-info.json"
+
+          echo "Deployed $SHA to $TARGET"
+          REMOTE
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 10); do
+            if curl -fsS "${{ inputs.app_url }}/deploy-info.json?t=$(date +%s)" | grep -q "${{ github.sha }}"; then
+              echo "✅ ${{ inputs.app_url }} is serving commit ${{ github.sha }}"
+              exit 0
+            fi
+            echo "Waiting for the new version... ($i/10)"
+            sleep 5
+          done
+          echo "❌ ${{ inputs.app_url }} is not serving commit ${{ github.sha }}"
+          exit 1

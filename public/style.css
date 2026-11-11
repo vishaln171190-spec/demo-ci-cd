@@ -1,0 +1,29 @@
+body {
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  margin: 0;
+  background: #f8fafc;
+  color: #0f172a;
+}
+main {
+  max-width: 640px;
+  margin: 40px auto;
+  padding: 0 16px;
+}
+.badge {
+  display: inline-block;
+  padding: 4px 14px;
+  border-radius: 999px;
+  color: #fff;
+  background: #6b7280;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.badge.dev { background: #2563eb; }
+.badge.stage { background: #d97706; }
+.info td { padding: 4px 16px 4px 0; }
+#calc { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#calc input { width: 90px; padding: 6px; }
+#calc select, #calc button { padding: 6px 10px; }
+#result { font-size: 1.25rem; font-weight: 700; }
+.foot { margin-top: 40px; color: #64748b; font-size: 0.9rem; }
