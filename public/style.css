@@ -26,4 +26,5 @@ main {
 #calc input { width: 90px; padding: 6px; }
 #calc select, #calc button { padding: 6px 10px; }
 #result { font-size: 1.25rem; font-weight: 700; }
+#result.error { font-size: 1rem; color: #dc2626; }
 .foot { margin-top: 40px; color: #64748b; font-size: 0.9rem; }

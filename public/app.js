@@ -39,7 +39,14 @@ document.getElementById('calc').addEventListener('submit', (event) => {
   const a = Number(document.getElementById('a').value);
   const b = Number(document.getElementById('b').value);
   const op = document.getElementById('op').value;
-  document.getElementById('result').textContent = Calculator[op](a, b);
+  const result = document.getElementById('result');
+  try {
+    result.textContent = Calculator[op](a, b);
+    result.classList.remove('error');
+  } catch (err) {
+    result.textContent = err.message;
+    result.classList.add('error');
+  }
 });
 
 showInfo();
